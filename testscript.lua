@@ -2,7 +2,7 @@ if not LPH_OBFUSCATED then
     LPH_NO_VIRTUALIZE = function(...) return ... end
 end
 
---// Services
+-- Services
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
@@ -11,7 +11,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Self = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local Mouse = Self:GetMouse()
 
 local Mango = {
     Locals = {
@@ -23,7 +22,7 @@ local Mango = {
     Visuals = {}
 }
 
---// Game Detection
+-- Game Detection
 local CurrentGame = nil
 local Games = {
     [1008451066] = {Name = 'Da Hood', Updater = 'UpdateMousePosI2'},
@@ -57,29 +56,22 @@ local function GetRemote()
     return ReplicatedStorage:FindFirstChild("MainEvent") or ReplicatedStorage:FindFirstChild("MainRemotes")
 end
 
---// Helpers
-local function GetRoot(char) 
-    return char and char:FindFirstChild("HumanoidRootPart") 
-end
+-- Helpers
+local function GetRoot(char) return char and char:FindFirstChild("HumanoidRootPart") end
 
 local function GetBestPart(target, config)
     if not target or not target.Character then return nil end
     local char = target.Character
-    
-    if config.Point == "Head" then
-        return char:FindFirstChild("Head")
-    elseif config.Point == "Nearest Point" or config.Type == "Advanced" then
-        local root = GetRoot(char)
-        local head = char:FindFirstChild("Head")
+    local root = GetRoot(char)
+    local head = char:FindFirstChild("Head")
+
+    if config.Point == "Head" and head then return head end
+    if config.Point == "Nearest Part" or config.Type == "Advanced" then
         if not root or not head then return root end
-        
         local cameraPos = Camera.CFrame.Position
-        local rootDist = (root.Position - cameraPos).Magnitude
-        local headDist = (head.Position - cameraPos).Magnitude
-        
-        return headDist < rootDist * config.Scale and head or root
+        return (head.Position - cameraPos).Magnitude < (root.Position - cameraPos).Magnitude * config.Scale and head or root
     end
-    return GetRoot(char)
+    return root
 end
 
 local function ShouldTarget(plr)
@@ -90,12 +82,12 @@ local function ShouldTarget(plr)
     if not (hum and root) or hum.Health <= 0 then return false end
 
     local c = shared.Saved.Conditions
-    if c.Knocked and (char:FindFirstChild("BodyEffects") and char.BodyEffects:FindFirstChild("K.O") and char.BodyEffects["K.O"].Value) then return false end
-    if c.SelfKnocked and (Self.Character and Self.Character:FindFirstChild("BodyEffects") and Self.Character.BodyEffects:FindFirstChild("K.O") and Self.Character.BodyEffects["K.O"].Value) then return false end
+    if c.Knocked and (char.BodyEffects and char.BodyEffects["K.O"] and char.BodyEffects["K.O"].Value) then return false end
+    if c.SelfKnocked and (Self.Character and Self.Character.BodyEffects and Self.Character.BodyEffects["K.O"] and Self.Character.BodyEffects["K.O"].Value) then return false end
     if c.Grabbed and char:FindFirstChild("GRABBING_CONSTRAINT") then return false end
     if c.Forcefield and char:FindFirstChild("ForceField") then return false end
 
-    if c.Visible or c.Test then
+    if (c.Visible or c.Test) then
         local params = RaycastParams.new()
         params.FilterDescendantsInstances = {Self.Character}
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -113,9 +105,10 @@ local function GetFOVBox(target, isSilent)
     local screen, onScreen = Camera:WorldToViewportPoint(root.Position)
     if not onScreen or screen.Z <= 0 then return nil end
 
-    local cfg = (isSilent and shared.Saved.SilentAim or shared.Saved.TriggerBot).FOV.FOV['Weapon Configuration']
+    local fovConfig = isSilent and shared.Saved.SilentAim.FOV or shared.Saved.TriggerBot.FOV
+    local cfg = fovConfig.FOV['Weapon Configuration']
     local tool = Self.Character and Self.Character:FindFirstChildOfClass("Tool")
-    local cat = (tool and tool.Name:find("Shotgun")) and "Shotguns" or (tool and tool.Name:find("Pistol") and "Pistols") or "Others"
+    local cat = tool and (tool.Name:find("Shotgun") and "Shotguns" or tool.Name:find("Pistol") and "Pistols") or "Others"
 
     local f = cfg[cat] or cfg.Others
     local scale = (root.Size.Y * Camera.ViewportSize.Y) / (screen.Z * 2) * 78 / Camera.FieldOfView
@@ -131,42 +124,45 @@ end
 
 local function GetHitPosition(target, isCamlock)
     if not target or not target.Character then return nil end
-    local part = GetBestPart(target, isCamlock and shared.Saved.Camlock or shared.Saved.SilentAim)
+    local config = isCamlock and shared.Saved.Camlock or shared.Saved.SilentAim
+    local part = GetBestPart(target, config)
     if not part then return nil end
 
-    local cfg = isCamlock and shared.Saved.Camlock.Prediction or shared.Saved.SilentAim.Prediction
-    if not cfg.Enabled then return part.Position end
+    local predConfig = config.Prediction
+    if not predConfig.Enabled then return part.Position end
 
     local hum = target.Character:FindFirstChild("Humanoid")
-    local velocity = part.AssemblyLinearVelocity
     local isAir = hum and (hum:GetState() == Enum.HumanoidStateType.Freefall or hum:GetState() == Enum.HumanoidStateType.Jumping)
+    local pred = isAir and predConfig.Air or predConfig.Ground
 
-    local pred = isAir and cfg.Air or cfg.Ground
-    return part.Position + (velocity * pred)
+    return part.Position + (part.AssemblyLinearVelocity * pred)
 end
 
---// Silent Aim
+local function IsValidForCamlock()
+    local checks = shared.Saved.Camlock.Checks
+    if checks['Right Clicking'] and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then return false end
+    return true
+end
+
+-- Silent Aim
 local function SilentAimLogic()
     if not shared.Saved.SilentAim.Enabled then return end
-
     local target = Mango.Locals.SilentAimTarget
     if not target or not ShouldTarget(target) then return end
 
     local hitPos = GetHitPosition(target, false)
-    if not hitPos then return end
-
-    if shared.Saved.Enhancements["Client Redirection"].Enabled and CurrentGame then
+    if hitPos and shared.Saved.Enhancements["Client Redirection"].Enabled then
         local remote = GetRemote()
-        local updater = CurrentGame.Updater or GetDeeHoodUpdater()
+        local updater = CurrentGame and (CurrentGame.Updater or GetDeeHoodUpdater())
         if remote and updater then
             remote:FireServer(updater, hitPos)
         end
     end
 end
 
---// Camlock
+-- Camlock
 local function AimAssist()
-    if not shared.Saved.Camlock.Enabled then return end
+    if not shared.Saved.Camlock.Enabled or not IsValidForCamlock() then return end
     local target = Mango.Locals.AimAssistTarget
     if not target or not ShouldTarget(target) then return end
 
@@ -185,22 +181,18 @@ local function AimAssist()
     Camera.CFrame = Camera.CFrame:Lerp(targetCF, smooth)
 end
 
---// TriggerBot
+-- TriggerBot
 local function TriggerBot()
     if not (shared.Saved.TriggerBot.Enabled and Mango.Locals.TriggerState) then return end
 
-    local target = Mango.Locals.SilentAimTarget or Mango.Locals.AimAssistTarget
-    if not target then target = GetClosestPlayerToCursor() end
+    local target = Mango.Locals.SilentAimTarget or Mango.Locals.AimAssistTarget or GetClosestPlayerToCursor()
     if not target or not ShouldTarget(target) then return end
 
     local box = GetFOVBox(target, false)
     if not box then return end
 
     local mpos = UserInputService:GetMouseLocation()
-    local inside = mpos.X >= box.X and mpos.X <= box.X + box.Width and
-                   mpos.Y >= box.Y and mpos.Y <= box.Y + box.Height
-
-    if inside then
+    if mpos.X >= box.X and mpos.X <= box.X + box.Width and mpos.Y >= box.Y and mpos.Y <= box.Y + box.Height then
         local tool = Self.Character and Self.Character:FindFirstChildOfClass("Tool")
         if tool then
             local now = tick()
@@ -221,19 +213,20 @@ local function GetClosestPlayerToCursor()
         if plr == Self or not plr.Character then continue end
         if not ShouldTarget(plr) then continue end
 
-        local box = GetFOVBox(plr, true)
-        if shared.Saved.SilentAim.FOV.Visible and box then
-            if not (mpos.X >= box.X and mpos.X <= box.X + box.Width and
-                    mpos.Y >= box.Y and mpos.Y <= box.Y + box.Height) then
-                continue
-            end
-        end
-
         local root = GetRoot(plr.Character)
         local screen = Camera:WorldToViewportPoint(root.Position)
         if screen.Z <= 0 then continue end
 
         local mag = (Vector2.new(screen.X, screen.Y) - mpos).Magnitude
+
+        -- FOV Check for SilentAim
+        if shared.Saved.SilentAim.FOV.Visible then
+            local box = GetFOVBox(plr, true)
+            if box and not (mpos.X >= box.X and mpos.X <= box.X + box.Width and mpos.Y >= box.Y and mpos.Y <= box.Y + box.Height) then
+                continue
+            end
+        end
+
         if mag < dist then
             dist = mag
             closest = plr
@@ -242,17 +235,17 @@ local function GetClosestPlayerToCursor()
     return closest
 end
 
---// Visuals
+-- Visuals
 local function UpdateVisuals()
-    if not shared.Saved.SilentAim.FOV.Visible then 
+    if not shared.Saved.SilentAim.FOV.Visible then
         if Mango.Visuals.SilentFOV then Mango.Visuals.SilentFOV.Visible = false end
-        return 
+        return
     end
 
     local target = Mango.Locals.SilentAimTarget
-    if not target then 
+    if not target then
         if Mango.Visuals.SilentFOV then Mango.Visuals.SilentFOV.Visible = false end
-        return 
+        return
     end
 
     local box = GetFOVBox(target, true)
@@ -263,7 +256,6 @@ local function UpdateVisuals()
         Mango.Visuals.SilentFOV.Thickness = 1.8
         Mango.Visuals.SilentFOV.Filled = false
         Mango.Visuals.SilentFOV.Color = Color3.fromRGB(0, 255, 120)
-        Mango.Visuals.SilentFOV.Transparency = 1
     end
 
     Mango.Visuals.SilentFOV.Position = Vector2.new(box.X, box.Y)
@@ -271,23 +263,21 @@ local function UpdateVisuals()
     Mango.Visuals.SilentFOV.Visible = true
 end
 
---// Spread Modifier
-local spreadMult = 1.0
+-- Spread Modifier
 local function UpdateSpread()
-    spreadMult = 1.0
     if not shared.Saved.Enhancements['Spread Modifier'].Enabled then return end
-
     local tool = Self.Character and Self.Character:FindFirstChildOfClass("Tool")
     if tool and shared.Saved.Enhancements['Spread Modifier'].Weapon[tool.Name] then
-        spreadMult = shared.Saved.Enhancements['Spread Modifier'].Weapon[tool.Name]
+        local val = shared.Saved.Enhancements['Spread Modifier'].Weapon[tool.Name]
         if shared.Saved.Enhancements['Spread Modifier'].Randomizer.Enabled then
-            spreadMult = spreadMult * (1 - shared.Saved.Enhancements['Spread Modifier'].Randomizer.Value + math.random() * shared.Saved.Enhancements['Spread Modifier'].Randomizer.Value * 2)
+            val = val * (1 - shared.Saved.Enhancements['Spread Modifier'].Randomizer.Value + math.random() * shared.Saved.Enhancements['Spread Modifier'].Randomizer.Value * 2)
         end
+        -- You can apply spread reduction here if your executor supports it
     end
 end
 RunService.Heartbeat:Connect(LPH_NO_VIRTUALIZE(UpdateSpread))
 
---// Main Loop
+-- Main Loop
 RunService.PreRender:Connect(LPH_NO_VIRTUALIZE(function()
     SilentAimLogic()
     AimAssist()
@@ -295,7 +285,7 @@ RunService.PreRender:Connect(LPH_NO_VIRTUALIZE(function()
     UpdateVisuals()
 end))
 
---// Speed
+-- Speed Modifiers
 RunService.RenderStepped:Connect(function()
     if not shared.Saved['Speed Modifiers'].Enabled then return end
     local hum = Self.Character and Self.Character:FindFirstChild("Humanoid")
@@ -312,25 +302,23 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    hum.WalkSpeed = shared.Saved['Speed Modifiers']['Multiplier Mode'] == 'Multiply' 
-        and hum.WalkSpeed * mul 
-        or mul
+    hum.WalkSpeed = shared.Saved['Speed Modifiers']['Multiplier Mode'] == 'Multiply' and hum.WalkSpeed * mul or mul
 end)
 
---// Keybinds
+-- Keybinds
 UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     local key = input.KeyCode.Name ~= "Unknown" and input.KeyCode.Name or input.UserInputType.Name
 
     if key == shared.Saved.SilentAim.Toggle then
         if shared.Saved.SilentAim.Mode == "Target" then
-            Mango.Locals.SilentAimTarget = Mango.Locals.SilentAimTarget and nil or GetClosestPlayerToCursor()
+            Mango.Locals.SilentAimTarget = not Mango.Locals.SilentAimTarget and GetClosestPlayerToCursor() or nil
         else
             Mango.Locals.SilentAimTarget = GetClosestPlayerToCursor()
         end
 
         if shared.Saved.Camlock.Sticky then
-            Mango.Locals.AimAssistTarget = Mango.Locals.AimAssistTarget and nil or GetClosestPlayerToCursor()
+            Mango.Locals.AimAssistTarget = not Mango.Locals.AimAssistTarget and GetClosestPlayerToCursor() or nil
         else
             Mango.Locals.AimAssistTarget = GetClosestPlayerToCursor()
         end
